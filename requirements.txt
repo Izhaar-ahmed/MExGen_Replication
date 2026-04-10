@@ -1,0 +1,15 @@
+icx360
+torch>=2.0
+transformers>=4.40
+datasets
+spacy>=3.6
+shap
+captum
+bert-score
+scikit-learn
+scipy
+numpy
+matplotlib
+seaborn
+tqdm
+jupyter
