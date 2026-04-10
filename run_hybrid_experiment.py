@@ -22,6 +22,7 @@ from src.segmentation import segment_text
 from src.attribution import explain_loo, explain_clime, explain_lshap
 from src.hybrid_attribution import (
     explain_hybrid_loo_lshap,
+    explain_hybrid_dynamic,
     estimate_calls_loo,
     estimate_calls_clime,
     estimate_calls_lshap,
@@ -52,7 +53,8 @@ NICE_NAMES = {
     "clime": "C-LIME",
     "lshap": "L-SHAP",
     "loo": "LOO",
-    "hybrid": "Hybrid\n(LOO→SHAP)",
+    "hybrid": "Hybrid\n(Fixed)",
+    "hybrid_dyn": "Hybrid\n(Dynamic)",
     "selfexplain": "Self-Expl.",
 }
 
@@ -61,6 +63,7 @@ COLORS = {
     "lshap": "#ff7f0e",
     "loo": "#2ca02c",
     "hybrid": "#e377c2",
+    "hybrid_dyn": "#d62728",
     "selfexplain": "#9467bd",
 }
 
@@ -127,7 +130,7 @@ def run_experiment():
         return lambda p_in, o_out: distilbart.log_prob(p_in, o_out)
 
     # Store per-sample results
-    methods = ["loo", "clime", "lshap", "hybrid"]
+    methods = ["loo", "clime", "lshap", "hybrid", "hybrid_dyn"]
     results = {m: {"scores": [], "curves": [], "calls": []} for m in methods}
 
     for i in range(N_SAMPLES):
@@ -178,7 +181,7 @@ def run_experiment():
         )
         print(f"    L-SHAP: {counter.count} calls")
 
-        # --- HYBRID (LOO → L-SHAP) ---
+        # --- HYBRID FIXED (LOO → L-SHAP, top_fraction=0.7) ---
         counter = CallCounter(make_scalarizer())
         sc_hybrid, hybrid_info = explain_hybrid_loo_lshap(
             units, None, counter, orig_out, orig_inp,
@@ -190,10 +193,23 @@ def run_experiment():
         results["hybrid"]["curves"].append(
             drop_top_k_and_score(units, sc_hybrid, counter_curve, orig_out, orig_inp)
         )
-        k = hybrid_info["k"]
-        cands = hybrid_info["candidate_indices"]
-        print(f"    Hybrid: {hybrid_info['model_calls']} calls "
-              f"(k={k}, candidates={cands})")
+        print(f"    Hybrid(Fixed):   {hybrid_info['model_calls']} calls "
+              f"(k={hybrid_info['k']})")
+
+        # --- HYBRID DYNAMIC (LOO → L-SHAP, adaptive threshold) ---
+        counter = CallCounter(make_scalarizer())
+        sc_hybrid_dyn, dyn_info = explain_hybrid_dynamic(
+            units, None, counter, orig_out, orig_inp,
+            threshold_alpha=0.5,
+        )
+        results["hybrid_dyn"]["scores"].append(sc_hybrid_dyn)
+        results["hybrid_dyn"]["calls"].append(dyn_info["model_calls"])
+        counter_curve = CallCounter(make_scalarizer())
+        results["hybrid_dyn"]["curves"].append(
+            drop_top_k_and_score(units, sc_hybrid_dyn, counter_curve, orig_out, orig_inp)
+        )
+        print(f"    Hybrid(Dynamic): {dyn_info['model_calls']} calls "
+              f"(k={dyn_info['k']}, threshold={dyn_info['threshold_value']:.3f})")
 
     # ------------------------------------------------------------------
     # 4. Compute metrics
@@ -263,7 +279,7 @@ def run_experiment():
     print("\n[5/5] Generating comparison plots...")
 
     # ---- Plot A: AUPC Comparison Bar Chart ----
-    plot_methods = ["clime", "lshap", "loo", "hybrid"]
+    plot_methods = ["clime", "lshap", "loo", "hybrid", "hybrid_dyn"]
     if selfexplain_aupc:
         plot_methods.append("selfexplain")
 
@@ -302,7 +318,7 @@ def run_experiment():
     grid = np.linspace(0, 0.20, 21)
     fig, ax = plt.subplots(figsize=(9, 6))
 
-    for m in ["clime", "lshap", "loo", "hybrid"]:
+    for m in ["clime", "lshap", "loo", "hybrid", "hybrid_dyn"]:
         curves = results[m]["curves"]
         g, mean, stderr = average_curves(curves, grid)
         label = NICE_NAMES[m].replace("\n", " ")
@@ -326,7 +342,7 @@ def run_experiment():
 
     # Left: actual calls
     ax = axes[0]
-    call_methods = ["loo", "clime", "lshap", "hybrid"]
+    call_methods = ["loo", "clime", "lshap", "hybrid", "hybrid_dyn"]
     x = np.arange(len(call_methods))
     call_vals = [call_results[m]["mean"] for m in call_methods]
     call_cols = [COLORS[m] for m in call_methods]
@@ -388,7 +404,7 @@ def run_experiment():
 
     # Panel 1: AUPC
     ax = axes[0]
-    bar_methods = ["clime", "lshap", "loo", "hybrid"]
+    bar_methods = ["clime", "lshap", "loo", "hybrid", "hybrid_dyn"]
     x = np.arange(len(bar_methods))
     v = [aupc_results[m]["mean"] for m in bar_methods]
     e = [aupc_results[m]["stderr"] for m in bar_methods]
